@@ -16,6 +16,12 @@ struct ScriptAction {
     };
 
     struct {
+        std::string text;
+        int min_delay_ms = 30;
+        int max_delay_ms = 120;
+    } typing;
+
+    struct {
         std::string image_template;
         double match_threshold = 0.8;
         bool wait_for_match = false;
@@ -30,6 +36,7 @@ struct Script {
     std::string description;
     uint32_t loop_count = 1;
     uint32_t created_at = 0;
+    double speed_multiplier = 1.0;
     std::vector<ScriptAction> actions;
 };
 

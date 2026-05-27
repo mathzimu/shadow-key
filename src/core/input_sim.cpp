@@ -1,7 +1,9 @@
 #include "input_sim.h"
 #include "utils/logger.h"
+#include "anti_detect.h"
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
 
 void InputSim::send_input(INPUT& in) {
     if (SendInput(1, &in, sizeof(INPUT)) != 1) {
@@ -88,6 +90,66 @@ void InputSim::mouse_scroll(int delta) {
     send_input(in);
 }
 
+void InputSim::type_text(const std::string& text, const TypingConfig& config) {
+    bool shift_down = false;
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        char c = text[i];
+        bool needs_shift = (c >= 'A' && c <= 'Z') ||
+                           strchr("~!@#$%^&*()_+{}|:\"<>?", c);
+        bool is_upper = (c >= 'A' && c <= 'Z');
+        char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        if (needs_shift && !shift_down) {
+            key_down(VK_SHIFT);
+            shift_down = true;
+        } else if (!needs_shift && shift_down) {
+            key_up(VK_SHIFT);
+            shift_down = false;
+        }
+
+        DWORD vk;
+        if (c >= 'a' && c <= 'z') {
+            vk = 'A' + (c - 'a');
+        } else if (c >= '0' && c <= '9') {
+            vk = c;
+        } else {
+            vk = char_to_vk(c);
+            if (vk == 0) continue;
+        }
+
+        key_down(vk);
+        key_up(vk);
+
+        int delay = AntiDetect::random_delay_range(config.min_delay_ms, config.max_delay_ms);
+        Sleep(delay);
+    }
+
+    if (shift_down) {
+        key_up(VK_SHIFT);
+    }
+}
+
+DWORD InputSim::char_to_vk(char c) {
+    switch (c) {
+        case ' ': return VK_SPACE;
+        case '.': return VK_OEM_PERIOD;
+        case ',': return VK_OEM_COMMA;
+        case ';': return VK_OEM_1;
+        case '\'': return VK_OEM_7;
+        case '[': return VK_OEM_4;
+        case ']': return VK_OEM_6;
+        case '\\': return VK_OEM_5;
+        case '-': return VK_OEM_MINUS;
+        case '=': return VK_OEM_PLUS;
+        case '/': return VK_OEM_2;
+        case '`': return VK_OEM_3;
+        case '\n': case '\r': return VK_RETURN;
+        case '\t': return VK_TAB;
+        default: return 0;
+    }
+}
+
 std::vector<MoveStep> InputSim::interpolate_linear(int x1, int y1, int x2, int y2,
                                                      int steps, int step_delay_ms) {
     std::vector<MoveStep> result;
@@ -101,6 +163,40 @@ std::vector<MoveStep> InputSim::interpolate_linear(int x1, int y1, int x2, int y
         step.x = static_cast<int>(std::round(x1 + (x2 - x1) * t));
         step.y = static_cast<int>(std::round(y1 + (y2 - y1) * t));
         step.delay_ms = step_delay_ms;
+        result.push_back(step);
+    }
+    return result;
+}
+
+std::vector<MoveStep> InputSim::interpolate_bezier(int x1, int y1, int x2, int y2,
+                                                     int steps, int step_delay_ms) {
+    std::vector<MoveStep> result;
+    if (steps <= 0) {
+        result.push_back({x2, y2, 0});
+        return result;
+    }
+
+    int dx = x2 - x1;
+    int dy = y2 - y1;
+    int dist = static_cast<int>(std::sqrt(dx * dx + dy * dy));
+
+    int cp1x = x1 + dx / 3 + AntiDetect::random_offset() * 3;
+    int cp1y = y1 + dy / 3 + AntiDetect::random_offset() * 3;
+    int cp2x = x1 + dx * 2 / 3 + AntiDetect::random_offset() * 3;
+    int cp2y = y1 + dy * 2 / 3 + AntiDetect::random_offset() * 3;
+
+    for (int i = 1; i <= steps; ++i) {
+        double t = static_cast<double>(i) / steps;
+        double u = 1.0 - t;
+
+        double xt = u * u * u * x1 + 3 * u * u * t * cp1x + 3 * u * t * t * cp2x + t * t * t * x2;
+        double yt = u * u * u * y1 + 3 * u * u * t * cp1y + 3 * u * t * t * cp2y + t * t * t * y2;
+
+        MoveStep step;
+        step.x = static_cast<int>(std::round(xt));
+        step.y = static_cast<int>(std::round(yt));
+        step.delay_ms = step_delay_ms + (rand() % 3 - 1);
+        if (step.delay_ms < 1) step.delay_ms = 1;
         result.push_back(step);
     }
     return result;

@@ -2,6 +2,16 @@
 #include <vector>
 #include <cstdint>
 
+enum class DelayMode {
+    Uniform,
+    Gaussian
+};
+
+enum class MouseCurveMode {
+    Linear,
+    Bezier
+};
+
 struct AntiDetectConfig {
     int min_delay_ms = 50;
     int max_delay_ms = 300;
@@ -10,7 +20,13 @@ struct AntiDetectConfig {
     int mouse_move_steps_max = 15;
     int mouse_step_delay_ms = 8;
     int screenshot_interval_ms = 500;
-    bool enable_human_curve = true;
+
+    int typing_min_delay_ms = 30;
+    int typing_max_delay_ms = 120;
+    bool record_filter_mousemove = false;
+
+    DelayMode delay_mode = DelayMode::Uniform;
+    MouseCurveMode curve_mode = MouseCurveMode::Bezier;
 };
 
 class AntiDetect {

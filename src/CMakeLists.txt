@@ -5,6 +5,7 @@ set(SOURCES
     core/screen_capture.cpp
     core/image_matcher.cpp
     core/anti_detect.cpp
+    core/hotkey_manager.cpp
     script/script_parser.cpp
     script/script_executor.cpp
     ui/main_window.cpp

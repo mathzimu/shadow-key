@@ -1,12 +1,14 @@
 #pragma once
 #include "core/input_hook.h"
 #include "core/anti_detect.h"
+#include "core/hotkey_manager.h"
 #include "script/script_executor.h"
+#include "script/script_format.h"
 #include <windows.h>
 #include <string>
 #include <vector>
 #include <atomic>
-#include <thread>
+#include <mutex>
 
 class MainWindow {
 public:
@@ -21,10 +23,22 @@ private:
     HINSTANCE hinstance_;
     InputHook hook_;
     ScriptExecutor executor_;
+    HotkeyManager hotkeys_;
     std::vector<InputEvent> recorded_events_;
     std::atomic<bool> is_recording_;
     std::string current_script_path_;
     AntiDetectConfig& anti_config_;
+    std::mutex events_mutex_;
+    std::vector<InputEvent> pending_events_;
+
+    int delete_action_idx_;
+    int edit_delay_idx_;
+    int edit_delay_value_;
+    char edit_text_buffer_[4096];
+    int edit_text_idx_;
+    float speed_multiplier_;
+    char script_name_buffer_[256];
+    char script_desc_buffer_[256];
 
     static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT handle_message(UINT msg, WPARAM wParam, LPARAM lParam);
@@ -46,4 +60,5 @@ private:
     void render_main_tab();
     void render_settings_tab();
     void render_log_tab();
+    void render_script_editor();
 };

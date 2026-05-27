@@ -74,6 +74,8 @@ void ScriptExecutor::set_status_callback(StatusCallback cb) {
 }
 
 void ScriptExecutor::execute_loop() {
+    double speed = std::max(0.1, script_.speed_multiplier);
+
     for (uint32_t loop = 0; loop < script_.loop_count || script_.loop_count == 0; ++loop) {
         if (state_ != ExecutorState::Running) break;
 
@@ -91,7 +93,7 @@ void ScriptExecutor::execute_loop() {
 
             execute_action(script_.actions[i]);
 
-            int delay = AntiDetect::random_delay();
+            int delay = static_cast<int>(AntiDetect::random_delay() / speed);
             Sleep(delay);
         }
     }
@@ -102,6 +104,14 @@ void ScriptExecutor::execute_loop() {
 }
 
 void ScriptExecutor::execute_action(const ScriptAction& action) {
+    if (!action.typing.text.empty()) {
+        TypingConfig cfg;
+        cfg.min_delay_ms = action.typing.min_delay_ms;
+        cfg.max_delay_ms = action.typing.max_delay_ms;
+        InputSim::type_text(action.typing.text, cfg);
+        return;
+    }
+
     if (!action.image_trigger.image_template.empty()) {
         bool ok = execute_image_trigger(action);
         if (!ok) {

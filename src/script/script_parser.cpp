@@ -60,6 +60,7 @@ std::string ScriptCodec::to_json(const Script& script) {
     j["description"] = script.description;
     j["loop_count"] = script.loop_count;
     j["created_at"] = script.created_at;
+    j["speed_multiplier"] = script.speed_multiplier;
 
     json actions = json::array();
     for (const auto& action : script.actions) {
@@ -86,6 +87,14 @@ std::string ScriptCodec::to_json(const Script& script) {
             case InputEventType::MouseWheel:
                 a["delta"] = action.wheel.delta;
                 break;
+        }
+
+        if (!action.typing.text.empty()) {
+            a["typing"] = {
+                {"text", action.typing.text},
+                {"min_delay_ms", action.typing.min_delay_ms},
+                {"max_delay_ms", action.typing.max_delay_ms}
+            };
         }
 
         if (!action.image_trigger.image_template.empty()) {
@@ -115,6 +124,7 @@ Script ScriptCodec::from_json(const std::string& json_str) {
         script.description = j.value("description", "");
         script.loop_count = j.value("loop_count", 1);
         script.created_at = j.value("created_at", 0);
+        script.speed_multiplier = j.value("speed_multiplier", 1.0);
 
         if (j.contains("actions")) {
             for (const auto& a : j["actions"]) {
@@ -141,6 +151,13 @@ Script ScriptCodec::from_json(const std::string& json_str) {
                     case InputEventType::MouseWheel:
                         action.wheel.delta = a["delta"];
                         break;
+                }
+
+                if (a.contains("typing")) {
+                    const auto& t = a["typing"];
+                    action.typing.text = t.value("text", "");
+                    action.typing.min_delay_ms = t.value("min_delay_ms", 30);
+                    action.typing.max_delay_ms = t.value("max_delay_ms", 120);
                 }
 
                 if (a.contains("image_trigger")) {
