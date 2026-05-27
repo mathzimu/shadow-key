@@ -5,10 +5,18 @@
 #include <memory>
 #include <string>
 
+/// Convenience wrapper around spdlog.
+///
+/// Initializes a combined console + file logger on first call to init().
+/// All subsequent LOG_* macros write to both outputs.
 class Logger {
 public:
+    /// Initialize the global logger instance.
+    /// @param log_file  Path to the log file (default: shadow_key.log)
     static void init(const std::string& log_file = "shadow_key.log");
-    static std::shared_ptr<spdlog::logger>& get();
+
+    /// Access the underlying spdlog logger.
+    [[nodiscard]] static std::shared_ptr<spdlog::logger>& get() noexcept;
 
 private:
     static std::shared_ptr<spdlog::logger> instance_;

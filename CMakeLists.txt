@@ -1,9 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(ShadowKey VERSION 0.1.0 LANGUAGES CXX)
+project(ShadowKey VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+# ---- Dependencies ----------------------------------------------------------
 
 find_package(OpenCV 4.8 REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 
@@ -42,9 +44,9 @@ FetchContent_Declare(
     GIT_TAG v1.91.0
 )
 
-# Declare all before making available
+# Fetch only what is needed
 set(_FETCH_DEPS)
-if(spdlog_FETCHED)   list(APPEND _FETCH_DEPS spdlog)   endif()
+if(spdlog_FETCHED)     list(APPEND _FETCH_DEPS spdlog)       endif()
 if(nlohmann_json_FETCHED) list(APPEND _FETCH_DEPS nlohmann_json) endif()
 list(APPEND _FETCH_DEPS imgui)
 
@@ -52,6 +54,32 @@ if(_FETCH_DEPS)
     FetchContent_MakeAvailable(${_FETCH_DEPS})
 endif()
 
+# ---- Build ----------------------------------------------------------------
+
 add_subdirectory(src)
 
 target_include_directories(ShadowKey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# ---- Install --------------------------------------------------------------
+
+include(GNUInstallDirs)
+install(TARGETS ShadowKey
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# Copy OpenCV DLLs next to the executable (Windows)
+if(WIN32)
+    get_target_property(_opencv_dll_dir OpenCV::core IMPORTED_LOCATION)
+    if(_opencv_dll_dir)
+        get_filename_component(_opencv_dll_dir "${_opencv_dll_dir}" DIRECTORY)
+        install(DIRECTORY "${_opencv_dll_dir}/"
+                DESTINATION ${CMAKE_INSTALL_BINDIR}
+                FILES_MATCHING REGEX "opencv_.*\\.dll$")
+    endif()
+endif()
+
+# ---- Developer hints -----------------------------------------------------
+
+message(STATUS "ShadowKey ${PROJECT_VERSION}")
+message(STATUS "  OpenCV:      ${OpenCV_VERSION}")
+message(STATUS "  Install dir: ${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}")

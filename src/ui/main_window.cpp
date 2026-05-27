@@ -326,6 +326,7 @@ void MainWindow::render_script_editor() {
     ImGui::SliderFloat("Speed Multiplier", &speed_multiplier_, 0.1f, 5.0f, "%.1fx");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("2.0x = twice as fast, 0.5x = half speed");
+    executor_.set_speed_multiplier(speed_multiplier_);
 
     int loop = static_cast<int>(script.loop_count);
     ImGui::InputInt("Loop Count", &loop);
@@ -340,6 +341,7 @@ void MainWindow::render_script_editor() {
         script.name = script_name_buffer_;
         script.description = script_desc_buffer_;
         script.speed_multiplier = speed_multiplier_;
+        executor_.set_speed_multiplier(speed_multiplier_);
         add_log("Script changes applied");
     }
 

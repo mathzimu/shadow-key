@@ -4,8 +4,8 @@
 #include <thread>
 #include <opencv2/opencv.hpp>
 
-ScriptExecutor::ScriptExecutor()
-    : state_(ExecutorState::Idle), action_index_(-1) {}
+ScriptExecutor::ScriptExecutor() noexcept
+    : state_(ExecutorState::Idle), action_index_(-1), speed_multiplier_(1.0) {}
 
 bool ScriptExecutor::load(const std::string& path) {
     script_ = ScriptCodec::load(path);
@@ -69,12 +69,12 @@ const Script& ScriptExecutor::current_script() const {
     return script_;
 }
 
-void ScriptExecutor::set_status_callback(StatusCallback cb) {
-    callback_ = std::move(cb);
+void ScriptExecutor::set_speed_multiplier(double multiplier) noexcept {
+    speed_multiplier_.store(std::max(0.1, multiplier));
 }
 
 void ScriptExecutor::execute_loop() {
-    double speed = std::max(0.1, script_.speed_multiplier);
+    speed_multiplier_.store(std::max(0.1, script_.speed_multiplier));
 
     for (uint32_t loop = 0; loop < script_.loop_count || script_.loop_count == 0; ++loop) {
         if (state_ != ExecutorState::Running) break;
@@ -93,6 +93,7 @@ void ScriptExecutor::execute_loop() {
 
             execute_action(script_.actions[i]);
 
+            double speed = speed_multiplier_.load();
             int delay = static_cast<int>(AntiDetect::random_delay() / speed);
             Sleep(delay);
         }

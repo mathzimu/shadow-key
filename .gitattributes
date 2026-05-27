@@ -1,0 +1,24 @@
+# Normalise line endings
+* text=auto
+
+# Source code
+*.h     text diff=cpp
+*.cpp   text diff=cpp
+*.hpp   text diff=cpp
+*.c     text diff=c
+*.cmake text
+*.bat   text eol=crlf
+
+# Docs
+*.md    text
+*.txt   text
+
+# Build system
+CMakeLists.txt text
+
+# Binary
+*.png   binary
+*.jpg   binary
+*.exe   binary
+*.dll   binary
+*.lib   binary
