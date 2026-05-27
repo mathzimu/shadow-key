@@ -1,0 +1,42 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Cache OpenCV
+        id: cache-opencv
+        uses: actions/cache@v4
+        with:
+          path: C:\opencv
+          key: opencv-4.8.0
+
+      - name: Install OpenCV
+        if: steps.cache-opencv.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o opencv.zip https://github.com/opencv/opencv/releases/download/4.8.0/opencv-4.8.0-windows.exe
+          7z x opencv.zip -oC:\ -y
+
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DOpenCV_DIR=C:\opencv\build
+
+      - name: Build
+        run: cmake --build build --config Release --verbose
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShadowKey
+          path: build\Release\ShadowKey.exe
