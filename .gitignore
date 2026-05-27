@@ -1,0 +1,33 @@
+# Build outputs
+build/
+cmake-build-*/
+out/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.vcxproj.*
+*.sln.docstates
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Compiled
+*.exe
+*.pdb
+*.ilk
+*.dll
+*.lib
+*.exp
+*.obj
+
+# Dependencies (fetched by CMake)
+_deps/
