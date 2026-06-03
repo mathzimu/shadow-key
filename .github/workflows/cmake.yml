@@ -21,18 +21,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\opencv
-          key: opencv-4.8.0
+          key: opencv-4.8.0-v2
 
       - name: Install OpenCV
         if: steps.cache-opencv.outputs.cache-hit != 'true'
+        shell: cmd
         run: |
-          curl -L -o opencv.zip https://github.com/opencv/opencv/releases/download/4.8.0/opencv-4.8.0-windows.exe
-          7z x opencv.zip -oC:\ -y
+          curl.exe -L -o opencv.exe https://github.com/opencv/opencv/releases/download/4.8.0/opencv-4.8.0-windows.exe
+          7z x opencv.exe -oC:\ -y
+          dir C:\opencv\build\OpenCVConfig.cmake
 
       - name: Configure
+        shell: cmd
         run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DOpenCV_DIR=C:\opencv\build
 
       - name: Build
+        shell: cmd
         run: cmake --build build --config Release --verbose
 
       - name: Upload Artifact
