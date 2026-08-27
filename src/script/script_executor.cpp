@@ -2,6 +2,7 @@
 #include "core/screen_capture.h"
 #include "utils/logger.h"
 #include <thread>
+#include <chrono>
 #include <opencv2/opencv.hpp>
 
 ScriptExecutor::ScriptExecutor() noexcept
@@ -38,35 +39,23 @@ bool ScriptExecutor::start() {
     return true;
 }
 
-void ScriptExecutor::stop() {
+void ScriptExecutor::stop() noexcept {
     state_ = ExecutorState::Stopped;
     emit_status(ExecutorState::Stopped, action_index_, "Execution stopped");
 }
 
-void ScriptExecutor::pause() {
+void ScriptExecutor::pause() noexcept {
     if (state_ == ExecutorState::Running) {
         state_ = ExecutorState::Paused;
         emit_status(ExecutorState::Paused, action_index_, "Execution paused");
     }
 }
 
-void ScriptExecutor::resume() {
+void ScriptExecutor::resume() noexcept {
     if (state_ == ExecutorState::Paused) {
         state_ = ExecutorState::Running;
         emit_status(ExecutorState::Running, action_index_, "Execution resumed");
     }
-}
-
-ExecutorState ScriptExecutor::state() const {
-    return state_;
-}
-
-int ScriptExecutor::current_action_index() const {
-    return action_index_;
-}
-
-const Script& ScriptExecutor::current_script() const {
-    return script_;
 }
 
 void ScriptExecutor::set_speed_multiplier(double multiplier) noexcept {
@@ -83,7 +72,7 @@ void ScriptExecutor::execute_loop() {
             if (state_ != ExecutorState::Running) break;
 
             while (state_ == ExecutorState::Paused) {
-                Sleep(10);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 if (state_ == ExecutorState::Stopped) return;
             }
 
@@ -95,7 +84,7 @@ void ScriptExecutor::execute_loop() {
 
             double speed = speed_multiplier_.load();
             int delay = static_cast<int>(AntiDetect::random_delay() / speed);
-            Sleep(delay);
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay));
         }
     }
 
@@ -183,7 +172,7 @@ bool ScriptExecutor::execute_image_trigger(const ScriptAction& action) {
                 LOG_WARN("Image trigger timeout for '{}'", action.image_trigger.image_template);
                 return false;
             }
-            Sleep(AntiDetect::config().screenshot_interval_ms);
+            std::this_thread::sleep_for(std::chrono::milliseconds(AntiDetect::config().screenshot_interval_ms));
         } else {
             return false;
         }

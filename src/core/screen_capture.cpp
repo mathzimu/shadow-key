@@ -1,6 +1,8 @@
 #include "screen_capture.h"
 #include "utils/logger.h"
 
+#if defined(_WIN32)
+
 cv::Mat ScreenCapture::capture_full() {
     int width = GetSystemMetrics(SM_CXSCREEN);
     int height = GetSystemMetrics(SM_CYSCREEN);
@@ -114,3 +116,74 @@ cv::Mat ScreenCapture::hbitmap_to_mat(HBITMAP hbm, int width, int height) {
     cv::cvtColor(mat, bgr, cv::COLOR_BGRA2BGR);
     return bgr;
 }
+
+#elif defined(__APPLE__)
+
+#include <CoreGraphics/CoreGraphics.h>
+
+static cv::Mat cgimage_to_mat(CGImageRef image) {
+    if (!image) return {};
+
+    size_t width = CGImageGetWidth(image);
+    size_t height = CGImageGetHeight(image);
+    if (width == 0 || height == 0) return {};
+
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    cv::Mat mat(static_cast<int>(height), static_cast<int>(width), CV_8UC4);
+    CGContextRef ctx = CGBitmapContextCreate(
+        mat.data, width, height, 8, width * 4, space,
+        static_cast<uint32_t>(kCGImageAlphaPremultipliedLast) |
+        static_cast<uint32_t>(kCGBitmapByteOrderDefault));
+    CGColorSpaceRelease(space);
+    if (!ctx) return {};
+
+    CGContextDrawImage(ctx, CGRectMake(0, 0, width, height), image);
+    CGContextRelease(ctx);
+
+    cv::Mat bgr;
+    cv::cvtColor(mat, bgr, cv::COLOR_BGRA2BGR);
+    return bgr;
+}
+
+cv::Mat ScreenCapture::capture_full() {
+    CGImageRef image = CGDisplayCreateImage(CGMainDisplayID());
+    if (!image) {
+        LOG_ERROR("ScreenCapture: CGDisplayCreateImage failed");
+        return {};
+    }
+    cv::Mat mat = cgimage_to_mat(image);
+    CGImageRelease(image);
+    return mat;
+}
+
+cv::Mat ScreenCapture::capture_region(const CaptureRegion& region) {
+    CGImageRef image = CGDisplayCreateImage(CGMainDisplayID());
+    if (!image) {
+        LOG_ERROR("ScreenCapture: CGDisplayCreateImage failed");
+        return {};
+    }
+
+    CGRect crop = CGRectMake(region.x, region.y,
+                             region.width, region.height);
+    CGImageRef cropped = CGImageCreateWithImageInRect(image, crop);
+    CGImageRelease(image);
+
+    cv::Mat mat = cgimage_to_mat(cropped);
+    if (cropped) CGImageRelease(cropped);
+    return mat;
+}
+
+bool ScreenCapture::save_screenshot(const std::string& path, const CaptureRegion* region) {
+    cv::Mat img = region ? capture_region(*region) : capture_full();
+    if (img.empty()) {
+        LOG_ERROR("Screenshot empty, cannot save to {}", path);
+        return false;
+    }
+    bool ok = cv::imwrite(path, img);
+    if (!ok) {
+        LOG_ERROR("Failed to save screenshot to {}", path);
+    }
+    return ok;
+}
+
+#endif

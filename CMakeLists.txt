@@ -46,12 +46,52 @@ FetchContent_Declare(
 
 # Fetch only what is needed
 set(_FETCH_DEPS)
-if(spdlog_FETCHED)     list(APPEND _FETCH_DEPS spdlog)       endif()
-if(nlohmann_json_FETCHED) list(APPEND _FETCH_DEPS nlohmann_json) endif()
+if(spdlog_FETCHED)
+    list(APPEND _FETCH_DEPS spdlog)
+endif()
+if(nlohmann_json_FETCHED)
+    list(APPEND _FETCH_DEPS nlohmann_json)
+endif()
 list(APPEND _FETCH_DEPS imgui)
 
 if(_FETCH_DEPS)
     FetchContent_MakeAvailable(${_FETCH_DEPS})
+endif()
+
+# ---- macOS dependencies ---------------------------------------------------
+
+if(APPLE)
+    enable_language(OBJC)
+    enable_language(OBJCXX)
+    # Target macOS 14 so CGDisplayCreateImage (deprecated but still functional
+    # on macOS 15) remains available in the SDK headers.
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "" FORCE)
+    endif()
+    find_package(OpenGL REQUIRED)
+
+    # GLAD: OpenGL function loader. We pin v0.1.36 because it ships a
+    # pre-generated glad.c/glad.h (no network fetch of the Khronos GL spec
+    # at configure time, unlike gl3w which downloads glcorearb.h).
+    FetchContent_Declare(
+        glad
+        GIT_REPOSITORY https://github.com/Dav1dde/glad.git
+        GIT_TAG v0.1.36
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(glad)
+
+    # GLFW: cross-platform window/context.
+    FetchContent_Declare(
+        glfw
+        GIT_REPOSITORY https://github.com/glfw/glfw.git
+        GIT_TAG 3.3.8
+        GIT_SHALLOW TRUE
+    )
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(glfw)
 endif()
 
 # ---- Build ----------------------------------------------------------------

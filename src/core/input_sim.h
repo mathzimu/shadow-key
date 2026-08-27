@@ -1,6 +1,5 @@
 #pragma once
 #include "input_hook.h"
-#include <windows.h>
 #include <vector>
 #include <cstdint>
 #include <string>
@@ -68,6 +67,10 @@ public:
     static void play_events(const std::vector<InputEvent>& events);
 
 private:
+#if defined(_WIN32)
     static void send_input(INPUT& in) noexcept;
     static DWORD char_to_vk(char c) noexcept;
+#elif defined(__APPLE__)
+    static int char_to_keycode(char c, bool& need_shift) noexcept;
+#endif
 };

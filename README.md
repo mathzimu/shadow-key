@@ -65,8 +65,8 @@ cmake --build build --config Release
 1. 运行 `ShadowKey.exe`
 2. 点击 **Start Recording**（或按 Ctrl+Alt+R），执行你希望录制的操作
 3. 点击 **Stop Recording**（或再按 Ctrl+Alt+R）完成录制
-4. 点击 **Save Script** 将录制内容保存为 `.sks` 文件
-5. 点击 **Load Script** 加载已有脚本
+4. 通过菜单栏 **Save Script** 将录制内容保存为 `.sks` 文件
+5. 通过菜单栏 **Load Script** 加载已有脚本
 6. 点击 **Play** 开始回放，按 Ctrl+Alt+S 停止
 
 ### 脚本编辑器
@@ -121,10 +121,11 @@ cmake --build build --config Release
 
 在 **Settings** 标签页中可调整：
 
-- 操作延时范围（50-300ms）
-- 点击偏移量（±5px）
-- 鼠标移动步数
-- 截图间隔（≥500ms）
+- **操作延时** — Min Delay 10–500ms、Max Delay 20–1000ms（默认 50–300ms）
+- **点击偏移量** — Click Offset 0–20px（默认 ±5px）
+- **鼠标轨迹** — Mouse Steps Min（1–20）/ Max（1–30）、Step Delay（1–50ms），曲线模式可选 Linear / Bezier
+- **打字模拟** — Typing Min/Max Delay（默认 30–120ms）
+- **截图间隔** — Screenshot Interval 100–3000ms（默认 500ms，用于图像匹配）
 
 ## 项目结构
 
@@ -134,6 +135,7 @@ src/
 ├── core/                   # 核心引擎层
 │   ├── input_hook.*        # 录制：SetWindowsHookEx
 │   ├── input_sim.*         # 回放：SendInput + 线性插值
+│   ├── hotkey_manager.*    # 全局热键：RegisterHotKey（Ctrl+Alt+R / Ctrl+Alt+S）
 │   ├── screen_capture.*    # 截图：BitBlt → OpenCV Mat
 │   ├── image_matcher.*     # 模板匹配（多尺度 + NMS）
 │   └── anti_detect.*       # 防检测（随机延时/偏移/高斯）
@@ -142,7 +144,7 @@ src/
 │   ├── script_parser.cpp   # JSON 序列化/反序列化
 │   └── script_executor.*   # 执行引擎（含图像触发）
 ├── ui/                     # UI 层（Dear ImGui）
-│   └── main_window.*       # 主窗口（Main / Settings / Log 标签页）
+│   └── main_window.*      # 主窗口（Main / Script Editor / Settings / Log 标签页）
 └── utils/                  # 工具层
     ├── logger.*            # spdlog 封装
     └── timer.*             # QPC 高精度计时器

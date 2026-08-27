@@ -1,16 +1,25 @@
 #include "main_window.h"
 #include "utils/logger.h"
 #include "script/script_format.h"
-#include <commdlg.h>
-
-#include <imgui.h>
-#include <imgui_impl_win32.h>
 #include <filesystem>
 #include <sstream>
 #include <iomanip>
 #include <ctime>
+#include <cstring>
 
-extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+#include <imgui.h>
+
+#if defined(_WIN32)
+    #include <commdlg.h>
+    #include <windows.h>
+    #include <imgui_impl_win32.h>
+#elif defined(__APPLE__)
+    #include <GL/gl3w.h>
+    #include <GLFW/glfw3.h>
+    #include <imgui_impl_glfw.h>
+    #include <imgui_impl_opengl3.h>
+    #include "mac_dialogs.h"
+#endif
 
 static std::string status_log;
 static std::mutex log_mutex;
@@ -53,8 +62,7 @@ static std::string event_desc(const ScriptAction& a) {
 }
 
 MainWindow::MainWindow()
-    : hwnd_(nullptr), hinstance_(nullptr),
-      is_recording_(false),
+    : is_recording_(false),
       anti_config_(AntiDetect::config()),
       delete_action_idx_(-1), edit_delay_idx_(-1), edit_delay_value_(0),
       edit_text_idx_(-1), speed_multiplier_(1.0f) {
@@ -69,182 +77,213 @@ MainWindow::~MainWindow() {
     cleanup_imgui();
 }
 
-bool MainWindow::create(HINSTANCE hInstance) {
-    hinstance_ = hInstance;
+// ---------------------------------------------------------------------------
+//  Recording / playback action handlers (platform-neutral)
+// ---------------------------------------------------------------------------
 
-    const wchar_t* CLASS_NAME = L"ShadowKeyWindow";
+void MainWindow::on_start_recording() {
+    recorded_events_.clear();
+    is_recording_ = true;
+    add_log("Recording started... (Ctrl+Alt+R to stop)");
 
-    WNDCLASSEX wc = {};
-    wc.cbSize = sizeof(WNDCLASSEX);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = wnd_proc;
-    wc.hInstance = hInstance;
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    wc.lpszClassName = CLASS_NAME;
-
-    if (!RegisterClassEx(&wc)) {
-        LOG_ERROR("RegisterClassEx failed: {}", GetLastError());
-        return false;
-    }
-
-    RECT rect = {0, 0, 700, 600};
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
-
-    hwnd_ = CreateWindowEx(
-        0, CLASS_NAME, L"ShadowKey 智能按键精灵",
-        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-        rect.right - rect.left, rect.bottom - rect.top,
-        nullptr, nullptr, hInstance, this
-    );
-
-    if (!hwnd_) {
-        LOG_ERROR("CreateWindowEx failed: {}", GetLastError());
-        return false;
-    }
-
-    setup_imgui();
-    ShowWindow(hwnd_, SW_SHOW);
-    UpdateWindow(hwnd_);
-
-    hotkeys_.set_hwnd(hwnd_);
-    hotkeys_.register_hotkey(HotkeyAction::ToggleRecording, MOD_CONTROL | MOD_ALT, 'R');
-    hotkeys_.register_hotkey(HotkeyAction::StopPlayback, MOD_CONTROL | MOD_ALT, 'S');
-    hotkeys_.set_callback([this](HotkeyAction action) {
-        switch (action) {
-            case HotkeyAction::ToggleRecording:
-                if (is_recording_) on_stop_recording();
-                else on_start_recording();
-                break;
-            case HotkeyAction::StopPlayback:
-                on_stop_playback();
-                break;
-        }
+    hook_.start([this](const InputEvent& ev) {
+        recording_callback(ev);
     });
-
-    executor_.set_status_callback([this](ExecutorState state, int index, const std::string& msg) {
-        executor_status_callback(state, index, msg);
-    });
-
-    LOG_INFO("ShadowKey window created");
-    return true;
 }
 
-int MainWindow::run() {
-    MSG msg;
-    while (true) {
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-            if (msg.message == WM_QUIT) return 0;
-        }
+void MainWindow::on_stop_recording() {
+    is_recording_ = false;
+    hook_.stop();
+    add_log("Recording stopped. " + std::to_string(recorded_events_.size()) + " events captured.");
+}
 
-        {
-            std::lock_guard<std::mutex> lock(events_mutex_);
-            for (const auto& ev : pending_events_) {
-                recorded_events_.push_back(ev);
+void MainWindow::on_save_script() {
+    auto& script = const_cast<Script&>(executor_.current_script());
+
+    if (recorded_events_.empty() && script.actions.empty()) {
+        add_log("No events or actions to save.");
+        return;
+    }
+
+    std::string path;
+#if defined(_WIN32)
+    OPENFILENAMEA ofn = {};
+    char p[MAX_PATH] = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = "ShadowKey Scripts (*.sks)\0*.sks\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = p;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = "sks";
+    ofn.Flags = OFN_HIDEREADONLY;
+    if (!recorded_events_.empty()) {
+        Script new_script;
+        new_script.name = script_name_buffer_[0] ? script_name_buffer_ : "Recorded " + std::to_string(time(nullptr));
+        new_script.description = script_desc_buffer_;
+        new_script.loop_count = 1;
+        new_script.speed_multiplier = speed_multiplier_;
+        new_script.created_at = static_cast<uint32_t>(time(nullptr));
+        for (const auto& ev : recorded_events_) {
+            ScriptAction action{};
+            action.type = ev.type;
+            switch (ev.type) {
+                case InputEventType::KeyDown:
+                case InputEventType::KeyUp:
+                    action.key.vk_code = ev.key.vk_code;
+                    break;
+                case InputEventType::MouseMove:
+                    action.mouse_move.x = ev.mouse_move.x;
+                    action.mouse_move.y = ev.mouse_move.y;
+                    break;
+                case InputEventType::MouseLeftDown:
+                case InputEventType::MouseLeftUp:
+                case InputEventType::MouseRightDown:
+                case InputEventType::MouseRightUp:
+                    action.mouse_click.x = ev.mouse_click.x;
+                    action.mouse_click.y = ev.mouse_click.y;
+                    break;
+                case InputEventType::MouseWheel:
+                    action.wheel.delta = ev.wheel.delta;
+                    break;
             }
-            pending_events_.clear();
+            new_script.actions.push_back(action);
         }
-
-        render_ui();
-    }
-    return 0;
-}
-
-LRESULT CALLBACK MainWindow::wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
-        return true;
-
-    if (msg == WM_CREATE) {
-        auto* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
-        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
-        return DefWindowProc(hwnd, msg, wParam, lParam);
-    }
-
-    auto* window = reinterpret_cast<MainWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
-    if (window) {
-        if (window->hotkeys_.handle_hotkey(msg, wParam, lParam))
-            return 0;
-        return window->handle_message(msg, wParam, lParam);
-    }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
-
-LRESULT MainWindow::handle_message(UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch (msg) {
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
-        default:
-            return DefWindowProc(hwnd_, msg, wParam, lParam);
-    }
-}
-
-void MainWindow::setup_imgui() {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.FontGlobalScale = 1.2f;
-    ImGui::StyleColorsDark();
-    ImGui_ImplWin32_Init(hwnd_);
-}
-
-void MainWindow::cleanup_imgui() {
-    ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
-}
-
-void MainWindow::render_ui() {
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
-
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("ShadowKey", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_MenuBar);
-
-    if (ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Load Script...")) on_load_script();
-            if (ImGui::MenuItem("Save Script")) on_save_script();
-            ImGui::Separator();
-            if (ImGui::MenuItem("Exit")) PostQuitMessage(0);
-            ImGui::EndMenu();
+        if (GetSaveFileNameA(&ofn)) {
+            current_script_path_ = p;
+            if (ScriptCodec::save(new_script, current_script_path_)) {
+                executor_.load_script(new_script);
+                add_log("Script saved: " + current_script_path_);
+            }
         }
-        if (ImGui::BeginMenu("Help")) {
-            ImGui::MenuItem("Hotkeys:");
-            ImGui::MenuItem("  Ctrl+Alt+R  Toggle Recording");
-            ImGui::MenuItem("  Ctrl+Alt+S  Stop Playback");
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-    }
-
-    if (ImGui::BeginTabBar("MainTabs")) {
-        if (ImGui::BeginTabItem("Main")) {
-            render_main_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Script Editor")) {
-            render_script_editor();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Settings")) {
-            render_settings_tab();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Log")) {
-            render_log_tab();
-            ImGui::EndTabItem();
+    } else if (!script.actions.empty()) {
+        script.name = script_name_buffer_;
+        script.description = script_desc_buffer_;
+        script.speed_multiplier = speed_multiplier_;
+        if (GetSaveFileNameA(&ofn)) {
+            current_script_path_ = p;
+            if (ScriptCodec::save(script, current_script_path_)) {
+                add_log("Script saved: " + current_script_path_);
+            }
         }
     }
-    ImGui::EndTabBar();
-
-    ImGui::End();
-    ImGui::Render();
+#elif defined(__APPLE__)
+    mac_save_file_dialog(path);
+    if (path.empty()) return;
+    if (!recorded_events_.empty()) {
+        Script new_script;
+        new_script.name = script_name_buffer_[0] ? script_name_buffer_ : "Recorded";
+        new_script.description = script_desc_buffer_;
+        new_script.loop_count = 1;
+        new_script.speed_multiplier = speed_multiplier_;
+        new_script.created_at = static_cast<uint32_t>(time(nullptr));
+        for (const auto& ev : recorded_events_) {
+            ScriptAction action{};
+            action.type = ev.type;
+            switch (ev.type) {
+                case InputEventType::KeyDown:
+                case InputEventType::KeyUp:
+                    action.key.vk_code = ev.key.vk_code;
+                    break;
+                case InputEventType::MouseMove:
+                    action.mouse_move.x = ev.mouse_move.x;
+                    action.mouse_move.y = ev.mouse_move.y;
+                    break;
+                case InputEventType::MouseLeftDown:
+                case InputEventType::MouseLeftUp:
+                case InputEventType::MouseRightDown:
+                case InputEventType::MouseRightUp:
+                    action.mouse_click.x = ev.mouse_click.x;
+                    action.mouse_click.y = ev.mouse_click.y;
+                    break;
+                case InputEventType::MouseWheel:
+                    action.wheel.delta = ev.wheel.delta;
+                    break;
+            }
+            new_script.actions.push_back(action);
+        }
+        current_script_path_ = path;
+        if (ScriptCodec::save(new_script, current_script_path_)) {
+            executor_.load_script(new_script);
+            add_log("Script saved: " + current_script_path_);
+        }
+    } else if (!script.actions.empty()) {
+        script.name = script_name_buffer_;
+        script.description = script_desc_buffer_;
+        script.speed_multiplier = speed_multiplier_;
+        current_script_path_ = path;
+        if (ScriptCodec::save(script, current_script_path_)) {
+            add_log("Script saved: " + current_script_path_);
+        }
+    }
+#endif
 }
+
+void MainWindow::on_load_script() {
+#if defined(_WIN32)
+    OPENFILENAMEA ofn = {};
+    char p[MAX_PATH] = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = hwnd_;
+    ofn.lpstrFilter = "ShadowKey Scripts (*.sks)\0*.sks\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = p;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
+    if (GetOpenFileNameA(&ofn)) {
+        current_script_path_ = p;
+        if (executor_.load(current_script_path_)) {
+            const auto& s = executor_.current_script();
+            strncpy_s(script_name_buffer_, s.name.c_str(), sizeof(script_name_buffer_) - 1);
+            strncpy_s(script_desc_buffer_, s.description.c_str(), sizeof(script_desc_buffer_) - 1);
+            speed_multiplier_ = static_cast<float>(s.speed_multiplier);
+            add_log("Script loaded: " + current_script_path_);
+        } else {
+            add_log("Failed to load script!");
+        }
+    }
+#elif defined(__APPLE__)
+    std::string path;
+    mac_open_file_dialog(path);
+    if (path.empty()) return;
+    current_script_path_ = path;
+    if (executor_.load(current_script_path_)) {
+        const auto& s = executor_.current_script();
+        std::strncpy(script_name_buffer_, s.name.c_str(), sizeof(script_name_buffer_) - 1);
+        std::strncpy(script_desc_buffer_, s.description.c_str(), sizeof(script_desc_buffer_) - 1);
+        speed_multiplier_ = static_cast<float>(s.speed_multiplier);
+        add_log("Script loaded: " + current_script_path_);
+    } else {
+        add_log("Failed to load script!");
+    }
+#endif
+}
+
+void MainWindow::on_start_playback() {
+    if (executor_.current_script().actions.empty()) {
+        add_log("No script loaded!");
+        return;
+    }
+    if (executor_.start()) {
+        add_log("Playback started");
+    }
+}
+
+void MainWindow::on_stop_playback() {
+    executor_.stop();
+    add_log("Playback stopped");
+}
+
+void MainWindow::recording_callback(const InputEvent& event) {
+    std::lock_guard<std::mutex> lock(events_mutex_);
+    pending_events_.push_back(event);
+}
+
+void MainWindow::executor_status_callback(ExecutorState state, int index, const std::string& msg) {
+    add_log("[" + executor_state_str(state) + "] " + msg);
+}
+
+// ---------------------------------------------------------------------------
+//  ImGui tab renderers (platform-neutral)
+// ---------------------------------------------------------------------------
 
 void MainWindow::render_main_tab() {
     ImGui::Text("Status: %s", executor_state_str(executor_.state()).c_str());
@@ -444,143 +483,297 @@ void MainWindow::render_log_tab() {
     }
 }
 
-void MainWindow::on_start_recording() {
-    recorded_events_.clear();
-    is_recording_ = true;
-    add_log("Recording started... (Ctrl+Alt+R to stop)");
+// ---------------------------------------------------------------------------
+//  Platform-specific windowing / frame management
+// ---------------------------------------------------------------------------
 
-    hook_.start([this](const InputEvent& ev) {
-        recording_callback(ev);
+#if defined(_WIN32)
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam))
+        return true;
+
+    if (msg == WM_CREATE) {
+        auto* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(cs->lpCreateParams));
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+
+    auto* window = reinterpret_cast<MainWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+    if (window) {
+        if (window->hotkeys_.handle_hotkey(msg, wParam, lParam))
+            return 0;
+        if (msg == WM_DESTROY) {
+            PostQuitMessage(0);
+            return 0;
+        }
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+bool MainWindow::create() {
+    const wchar_t* CLASS_NAME = L"ShadowKeyWindow";
+    HINSTANCE hInstance = GetModuleHandle(nullptr);
+    hinstance_ = hInstance;
+
+    WNDCLASSEX wc = {};
+    wc.cbSize = sizeof(WNDCLASSEX);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = wnd_proc;
+    wc.hInstance = hInstance;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.lpszClassName = CLASS_NAME;
+
+    if (!RegisterClassEx(&wc)) {
+        LOG_ERROR("RegisterClassEx failed: {}", GetLastError());
+        return false;
+    }
+
+    RECT rect = {0, 0, 700, 600};
+    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+
+    hwnd_ = CreateWindowEx(
+        0, CLASS_NAME, L"ShadowKey",
+        WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+        rect.right - rect.left, rect.bottom - rect.top,
+        nullptr, nullptr, hInstance, this);
+
+    if (!hwnd_) {
+        LOG_ERROR("CreateWindowEx failed: {}", GetLastError());
+        return false;
+    }
+
+    setup_imgui();
+    ShowWindow(hwnd_, SW_SHOW);
+    UpdateWindow(hwnd_);
+
+    hotkeys_.set_hwnd(hwnd_);
+    hotkeys_.register_hotkey(HotkeyAction::ToggleRecording, MOD_CONTROL | MOD_ALT, 'R');
+    hotkeys_.register_hotkey(HotkeyAction::StopPlayback, MOD_CONTROL | MOD_ALT, 'S');
+    hotkeys_.set_callback([this](HotkeyAction action) {
+        switch (action) {
+            case HotkeyAction::ToggleRecording:
+                if (is_recording_) on_stop_recording();
+                else on_start_recording();
+                break;
+            case HotkeyAction::StopPlayback:
+                on_stop_playback();
+                break;
+        }
     });
+
+    executor_.set_status_callback([this](ExecutorState state, int index, const std::string& msg) {
+        executor_status_callback(state, index, msg);
+    });
+
+    LOG_INFO("ShadowKey window created");
+    return true;
 }
 
-void MainWindow::on_stop_recording() {
-    is_recording_ = false;
-    hook_.stop();
-    add_log("Recording stopped. " + std::to_string(recorded_events_.size()) + " events captured.");
-}
+int MainWindow::run() {
+    MSG msg;
+    while (true) {
+        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+            if (msg.message == WM_QUIT) return 0;
+        }
 
-void MainWindow::on_save_script() {
-    auto& script = const_cast<Script&>(executor_.current_script());
-
-    if (recorded_events_.empty() && script.actions.empty()) {
-        add_log("No events or actions to save.");
-        return;
-    }
-
-    OPENFILENAMEA ofn = {};
-    char path[MAX_PATH] = {};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hwnd_;
-    ofn.lpstrFilter = "ShadowKey Scripts (*.sks)\0*.sks\0All Files (*.*)\0*.*\0";
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = "sks";
-    ofn.Flags = OFN_HIDEREADONLY;
-
-    if (!recorded_events_.empty()) {
-        Script new_script;
-        new_script.name = script_name_buffer_[0] ? script_name_buffer_ : "Recorded " + std::to_string(time(nullptr));
-        new_script.description = script_desc_buffer_;
-        new_script.loop_count = 1;
-        new_script.speed_multiplier = speed_multiplier_;
-        new_script.created_at = static_cast<uint32_t>(time(nullptr));
-
-        for (const auto& ev : recorded_events_) {
-            ScriptAction action{};
-            action.type = ev.type;
-            switch (ev.type) {
-                case InputEventType::KeyDown:
-                case InputEventType::KeyUp:
-                    action.key.vk_code = ev.key.vk_code;
-                    break;
-                case InputEventType::MouseMove:
-                    action.mouse_move.x = ev.mouse_move.x;
-                    action.mouse_move.y = ev.mouse_move.y;
-                    break;
-                case InputEventType::MouseLeftDown:
-                case InputEventType::MouseLeftUp:
-                case InputEventType::MouseRightDown:
-                case InputEventType::MouseRightUp:
-                    action.mouse_click.x = ev.mouse_click.x;
-                    action.mouse_click.y = ev.mouse_click.y;
-                    break;
-                case InputEventType::MouseWheel:
-                    action.wheel.delta = ev.wheel.delta;
-                    break;
+        {
+            std::lock_guard<std::mutex> lock(events_mutex_);
+            for (const auto& ev : pending_events_) {
+                recorded_events_.push_back(ev);
             }
-            new_script.actions.push_back(action);
+            pending_events_.clear();
         }
 
-        if (GetSaveFileNameA(&ofn)) {
-            current_script_path_ = path;
-            if (ScriptCodec::save(new_script, current_script_path_)) {
-                executor_.load_script(new_script);
-                add_log("Script saved: " + current_script_path_);
+        render_ui();
+    }
+    return 0;
+}
+
+void MainWindow::setup_imgui() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = 1.2f;
+    ImGui::StyleColorsDark();
+    ImGui_ImplWin32_Init(hwnd_);
+}
+
+void MainWindow::cleanup_imgui() {
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+}
+
+void MainWindow::render_ui() {
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+    build_imgui_frame();
+    ImGui::Render();
+}
+
+#elif defined(__APPLE__)
+
+void MainWindow::mac_open_file_dialog(std::string& out_path) {
+    out_path = mac_show_open_panel();
+}
+
+void MainWindow::mac_save_file_dialog(std::string& out_path) {
+    out_path = mac_show_save_panel();
+}
+
+bool MainWindow::create() {
+    if (!glfwInit()) {
+        LOG_ERROR("GLFW init failed");
+        return false;
+    }
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    glfw_window_ = glfwCreateWindow(700, 600, "ShadowKey", nullptr, nullptr);
+    if (!glfw_window_) {
+        LOG_ERROR("glfwCreateWindow failed");
+        return false;
+    }
+    glfwMakeContextCurrent(glfw_window_);
+    if (gl3wInit() != 0) {
+        LOG_ERROR("gl3wInit failed");
+        return false;
+    }
+    glfwSwapInterval(1);
+
+    setup_imgui();
+
+    hotkeys_.register_hotkey(HotkeyAction::ToggleRecording, MOD_CONTROL | MOD_ALT, 'R');
+    hotkeys_.register_hotkey(HotkeyAction::StopPlayback, MOD_CONTROL | MOD_ALT, 'S');
+    hotkeys_.set_callback([this](HotkeyAction action) {
+        switch (action) {
+            case HotkeyAction::ToggleRecording:
+                if (is_recording_) on_stop_recording();
+                else on_start_recording();
+                break;
+            case HotkeyAction::StopPlayback:
+                on_stop_playback();
+                break;
+        }
+    });
+
+    executor_.set_status_callback([this](ExecutorState state, int index, const std::string& msg) {
+        executor_status_callback(state, index, msg);
+    });
+
+    LOG_INFO("ShadowKey window created (macOS)");
+    return true;
+}
+
+int MainWindow::run() {
+    while (!glfwWindowShouldClose(glfw_window_)) {
+        {
+            std::lock_guard<std::mutex> lock(events_mutex_);
+            for (const auto& ev : pending_events_) {
+                recorded_events_.push_back(ev);
             }
+            pending_events_.clear();
         }
-    } else if (!script.actions.empty()) {
-        script.name = script_name_buffer_;
-        script.description = script_desc_buffer_;
-        script.speed_multiplier = speed_multiplier_;
 
-        if (GetSaveFileNameA(&ofn)) {
-            current_script_path_ = path;
-            if (ScriptCodec::save(script, current_script_path_)) {
-                add_log("Script saved: " + current_script_path_);
-            }
+        glfwPollEvents();
+        render_ui();
+    }
+    return 0;
+}
+
+void MainWindow::setup_imgui() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = 1.2f;
+    ImGui::StyleColorsDark();
+    ImGui_ImplGlfw_InitForOpenGL(glfw_window_, true);
+    ImGui_ImplOpenGL3_Init("#version 150");
+}
+
+void MainWindow::cleanup_imgui() {
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    if (glfw_window_) glfwDestroyWindow(glfw_window_);
+    glfwTerminate();
+}
+
+void MainWindow::render_ui() {
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    build_imgui_frame();
+    ImGui::Render();
+
+    int w = 0, h = 0;
+    glfwGetFramebufferSize(glfw_window_, &w, &h);
+    glViewport(0, 0, w, h);
+    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    glfwSwapBuffers(glfw_window_);
+}
+
+#endif
+
+// ---------------------------------------------------------------------------
+//  ImGui frame builder (platform-neutral, shared by both platforms)
+// ---------------------------------------------------------------------------
+
+void MainWindow::build_imgui_frame() {
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+    ImGui::Begin("ShadowKey", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_MenuBar);
+
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Load Script...")) on_load_script();
+            if (ImGui::MenuItem("Save Script")) on_save_script();
+            ImGui::Separator();
+#if defined(_WIN32)
+            if (ImGui::MenuItem("Exit")) PostQuitMessage(0);
+#else
+            if (ImGui::MenuItem("Exit")) glfwSetWindowShouldClose(glfw_window_, true);
+#endif
+            ImGui::EndMenu();
         }
-    }
-}
-
-void MainWindow::on_load_script() {
-    OPENFILENAMEA ofn = {};
-    char path[MAX_PATH] = {};
-
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = hwnd_;
-    ofn.lpstrFilter = "ShadowKey Scripts (*.sks)\0*.sks\0All Files (*.*)\0*.*\0";
-    ofn.lpstrFile = path;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.Flags = OFN_FILEMUSTEXIST | OFN_HIDEREADONLY;
-
-    if (GetOpenFileNameA(&ofn)) {
-        current_script_path_ = path;
-        if (executor_.load(path)) {
-            const auto& s = executor_.current_script();
-            strncpy_s(script_name_buffer_, s.name.c_str(), sizeof(script_name_buffer_) - 1);
-            strncpy_s(script_desc_buffer_, s.description.c_str(), sizeof(script_desc_buffer_) - 1);
-            speed_multiplier_ = static_cast<float>(s.speed_multiplier);
-            add_log("Script loaded: " + current_script_path_);
-        } else {
-            add_log("Failed to load script!");
+        if (ImGui::BeginMenu("Help")) {
+            ImGui::MenuItem("Hotkeys:");
+            ImGui::MenuItem("  Ctrl+Alt+R  Toggle Recording");
+            ImGui::MenuItem("  Ctrl+Alt+S  Stop Playback");
+            ImGui::EndMenu();
         }
+        ImGui::EndMenuBar();
     }
-}
 
-void MainWindow::on_start_playback() {
-    if (executor_.current_script().actions.empty()) {
-        add_log("No script loaded!");
-        return;
+    if (ImGui::BeginTabBar("MainTabs")) {
+        if (ImGui::BeginTabItem("Main")) {
+            render_main_tab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Script Editor")) {
+            render_script_editor();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Settings")) {
+            render_settings_tab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Log")) {
+            render_log_tab();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
     }
-    if (!executor_.start()) {
-        add_log("Failed to start playback!");
-    }
-}
 
-void MainWindow::on_stop_playback() {
-    executor_.stop();
-    add_log("Playback stopped.");
-}
-
-void MainWindow::recording_callback(const InputEvent& event) {
-    if (anti_config_.record_filter_mousemove && event.type == InputEventType::MouseMove)
-        return;
-
-    std::lock_guard<std::mutex> lock(events_mutex_);
-    pending_events_.push_back(event);
-}
-
-void MainWindow::executor_status_callback(ExecutorState state, int index, const std::string& msg) {
-    add_log("[" + executor_state_str(state) + "] " + msg);
+    ImGui::End();
 }

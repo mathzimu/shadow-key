@@ -1,6 +1,6 @@
 #pragma once
+#include "platform_types.h"
 #include <opencv2/opencv.hpp>
-#include <windows.h>
 #include <string>
 
 /// Region of the screen to capture.
@@ -8,10 +8,10 @@ struct CaptureRegion {
     int x, y, width, height;
 };
 
-/// Screen-capture helper wrapping BitBlt.
+/// Screen-capture helper.
 ///
-/// Captures the full desktop, a specified region, or a given HWND
-/// and returns the result as an OpenCV BGR Mat.
+/// On Windows it wraps BitBlt; on macOS it wraps CoreGraphics display
+/// capture. Results are returned as OpenCV BGR Mats.
 class ScreenCapture {
 public:
     ScreenCapture() = delete;
@@ -22,8 +22,10 @@ public:
     /// Capture a rectangular region.
     [[nodiscard]] static cv::Mat capture_region(const CaptureRegion& region);
 
+#if defined(_WIN32)
     /// Capture the client area of a given window.
     [[nodiscard]] static cv::Mat capture_window(HWND hwnd);
+#endif
 
     /// Save a screenshot to disk.
     /// @param path    Output file path (format chosen by extension).
@@ -33,7 +35,9 @@ public:
         const std::string& path,
         const CaptureRegion* region = nullptr);
 
+#if defined(_WIN32)
 private:
     [[nodiscard]] static cv::Mat hbitmap_to_mat(HBITMAP hbm,
-                                                 int width, int height);
+                                                int width, int height);
+#endif
 };

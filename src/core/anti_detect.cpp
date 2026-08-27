@@ -1,35 +1,46 @@
 #include "anti_detect.h"
-#include <windows.h>
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
 #include <algorithm>
 
+#if defined(_WIN32)
+    #include <windows.h>
+#elif defined(__APPLE__)
+    #include <unistd.h>
+#else
+    #include <unistd.h>
+#endif
+
 AntiDetectConfig AntiDetect::config_;
 
-AntiDetectConfig& AntiDetect::config() {
+AntiDetectConfig& AntiDetect::config() noexcept {
     static bool seeded = false;
     if (!seeded) {
+#if defined(_WIN32)
         srand(static_cast<unsigned>(time(nullptr)) + GetCurrentProcessId());
+#else
+        srand(static_cast<unsigned>(time(nullptr)) + static_cast<unsigned>(getpid()));
+#endif
         seeded = true;
     }
     return config_;
 }
 
-int AntiDetect::random_delay() {
+int AntiDetect::random_delay() noexcept {
     return random_delay_range(config_.min_delay_ms, config_.max_delay_ms);
 }
 
-int AntiDetect::random_delay_range(int min_ms, int max_ms) {
+int AntiDetect::random_delay_range(int min_ms, int max_ms) noexcept {
     if (max_ms <= min_ms) return min_ms;
     return min_ms + rand() % (max_ms - min_ms + 1);
 }
 
-int AntiDetect::random_offset() {
+int AntiDetect::random_offset() noexcept {
     return rand() % (config_.click_offset_px * 2 + 1) - config_.click_offset_px;
 }
 
-int AntiDetect::random_int(int min, int max) {
+int AntiDetect::random_int(int min, int max) noexcept {
     if (max <= min) return min;
     return min + rand() % (max - min + 1);
 }
@@ -40,12 +51,12 @@ std::vector<std::pair<int, int>> AntiDetect::apply_click_offset(int x, int y) {
     return {{ox, oy}};
 }
 
-int AntiDetect::get_mouse_steps(int distance) {
+int AntiDetect::get_mouse_steps(int distance) noexcept {
     int steps = distance / 30;
     return std::clamp(steps, config_.mouse_move_steps_min, config_.mouse_move_steps_max);
 }
 
-double AntiDetect::gaussian_sample(double mean, double stddev) {
+double AntiDetect::gaussian_sample(double mean, double stddev) noexcept {
     static bool has_spare = false;
     static double spare;
 

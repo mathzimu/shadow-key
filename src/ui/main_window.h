@@ -4,11 +4,15 @@
 #include "core/hotkey_manager.h"
 #include "script/script_executor.h"
 #include "script/script_format.h"
-#include <windows.h>
+#include "core/platform_types.h"
 #include <string>
 #include <vector>
 #include <atomic>
 #include <mutex>
+
+#if defined(__APPLE__)
+    #include <GLFW/glfw3.h>
+#endif
 
 /// Main application window combining Dear ImGui UI, input hook, script
 /// executor, and global-hotkey management.
@@ -20,17 +24,13 @@ public:
     MainWindow(const MainWindow&)            = delete;
     MainWindow& operator=(const MainWindow&) = delete;
 
-    /// Register the window class, create the window, and initialise ImGui.
-    [[nodiscard]] bool create(HINSTANCE hInstance);
+    /// Create the window and initialise ImGui.
+    [[nodiscard]] bool create();
 
-    /// Message loop.  Returns the exit code from PostQuitMessage.
+    /// Run the UI loop until the window is closed. Returns the exit code.
     int run();
 
 private:
-    // -- Window handles -----------------------------------------------------
-    HWND      hwnd_{nullptr};
-    HINSTANCE hinstance_{nullptr};
-
     // -- Sub-systems --------------------------------------------------------
     InputHook       hook_;
     ScriptExecutor  executor_;
@@ -56,15 +56,18 @@ private:
     char    script_name_buffer_[256];
     char    script_desc_buffer_[256];
 
-    // -- Message handling ---------------------------------------------------
-    static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg,
-                                     WPARAM wParam, LPARAM lParam);
-    LRESULT handle_message(UINT msg, WPARAM wParam, LPARAM lParam);
+#if defined(_WIN32)
+    HWND      hwnd_{nullptr};
+    HINSTANCE hinstance_{nullptr};
+#elif defined(__APPLE__)
+    GLFWwindow* glfw_window_{nullptr};
+#endif
 
     // -- ImGui helpers ------------------------------------------------------
     void render_ui();
     void setup_imgui();
     void cleanup_imgui();
+    void build_imgui_frame();
 
     // -- Action handlers ----------------------------------------------------
     void on_start_recording();
@@ -84,4 +87,9 @@ private:
     void render_settings_tab();
     void render_log_tab();
     void render_script_editor();
+
+#if defined(__APPLE__)
+    void mac_open_file_dialog(std::string& out_path);
+    void mac_save_file_dialog(std::string& out_path);
+#endif
 };

@@ -1,38 +1,15 @@
 #pragma once
-#include <windows.h>
-#include <functional>
+#include "platform_types.h"
 
-/// Types of input events that can be recorded or scripted.
-enum class InputEventType {
-    KeyDown,
-    KeyUp,
-    MouseMove,
-    MouseLeftDown,
-    MouseLeftUp,
-    MouseRightDown,
-    MouseRightUp,
-    MouseWheel
-};
+#if defined(_WIN32)
+    #include <windows.h>
+#endif
 
-/// A single recorded input event.
-struct InputEvent {
-    InputEventType type;
-    DWORD          timestamp;          ///< Tick count at capture time.
-    union {
-        struct { DWORD vk_code; }          key;         ///< Virtual-key code for keyboard events.
-        struct { int x; int y; }           mouse_move;  ///< Cursor position for mouse-move events.
-        struct { int x; int y; }           mouse_click; ///< Cursor position for click events.
-        struct { int delta; }              wheel;       ///< Wheel delta for scroll events.
-    };
-};
-
-/// Callback invoked on every captured input event.
-using InputEventCallback = std::function<void(const InputEvent&)>;
-
-/// Low-level Windows hook recorder.
+/// Low-level input recorder.
 ///
-/// Installs WH_KEYBOARD_LL and WH_MOUSE_LL hooks and forwards
-/// captured events through a user-supplied callback.
+/// On Windows it installs WH_KEYBOARD_LL / WH_MOUSE_LL hooks and forwards
+/// captured events through a user-supplied callback. On macOS it installs a
+/// CGEvent tap on a background thread.
 class InputHook {
 public:
     InputHook() noexcept;
@@ -41,23 +18,34 @@ public:
     InputHook(const InputHook&)            = delete;
     InputHook& operator=(const InputHook&) = delete;
 
-    /// Start capturing input.  Callback runs on the message-pump thread.
-    /// @return true if both hooks were installed successfully.
+    /// Start capturing input.  Callback may run on a capture thread.
+    /// @return true if capture started successfully.
     [[nodiscard]] bool start(InputEventCallback callback);
 
-    /// Uninstall hooks and stop capturing.
+    /// Uninstall hooks/taps and stop capturing.
     void stop() noexcept;
 
-    /// @return true when hooks are active.
+    /// @return true when capture is active.
     [[nodiscard]] bool is_running() const noexcept;
 
+    /// Dispatch an event to the registered callback (used by the capture thread).
+    void push_event(const InputEvent& ev);
+
 private:
+#if defined(_WIN32)
     static LRESULT CALLBACK keyboard_proc(int nCode, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK mouse_proc(int nCode, WPARAM wParam, LPARAM lParam);
 
     static InputHook* instance_;
     HHOOK             keyboard_hook_{nullptr};
     HHOOK             mouse_hook_{nullptr};
+#elif defined(__APPLE__)
+    static void* tap_thread_proc(void* arg);
+    pthread_t   tap_thread_{0};
+    void*       tap_run_loop_{nullptr};
+    int         tap_ref_count_{0};
+#endif
+
     InputEventCallback callback_;
-    bool              running_{false};
+    bool                running_{false};
 };
